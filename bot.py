@@ -13,18 +13,11 @@ from telegram.ext import (
     filters,
 )
 
-# ... (بعد سطور الـ import)
-
+# -------------------- الإعدادات --------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-# السطر الذي يجلب الآيدي
-ADMIN_ID_RAW = os.getenv("ADMIN_ID", "0").strip() or "0"
-ADMIN_ID = int(ADMIN_ID_RAW)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0").strip() or "0")
+DB_PATH = os.getenv("DB_PATH", "mcq.db")
 
-# --- أضف هذا الكود للكشف ---
-print(f"DEBUG: Token loaded? {'Yes' if BOT_TOKEN else 'No'}")
-print(f"DEBUG: Raw ADMIN_ID from Env: '{os.getenv('ADMIN_ID')}'") # لنرى ماذا يأتي من النظام
-print(f"DEBUG: Final ADMIN_ID: {ADMIN_ID}")
-# ---------------------------
 # التحقق من المشرف
 def is_admin(update: Update) -> bool:
     return update.effective_user is not None and update.effective_user.id == ADMIN_ID
