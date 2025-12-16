@@ -15,12 +15,9 @@ from telegram.ext import (
     filters,
 )
 
-# -------------------- إعداد السجلات (للكشف عن الأخطاء) --------------------
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
 # -------------------- الإعدادات --------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_ID = 7358178408  # آيديك
+ADMIN_ID = 7358178408
 DB_PATH = "super_mcq.db"
 
 # -------------------- قاعدة البيانات --------------------
@@ -97,16 +94,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "send_one":
         await query.answer("⏳ جاري الإرسال...")
-        if await process_send_next(context):
+        if await process_send_next(context, update.effective_user.id): # نمرر الآيدي لإرسال الأخطاء
             await refresh_panel_inplace(query, context)
             await context.bot.answer_callback_query(query.id, text="✅ تم الإرسال!", show_alert=False)
         else:
-            await context.bot.answer_callback_query(query.id, text="⚠️ لا يوجد أسئلة أو قنوات!", show_alert=True)
+            await context.bot.answer_callback_query(query.id, text="⚠️ راجع الخاص لمعرفة سبب الفشل.", show_alert=True)
 
     elif data == "send_all":
         await query.answer("🚀 بدأ النشر...")
         status_msg = await query.message.reply_text("⏳ **جاري النشر...**")
-        count = await process_send_all(context, status_msg)
+        count = await process_send_all(context, status_msg, update.effective_user.id)
         await status_msg.delete()
         await refresh_panel_inplace(query, context)
         await context.bot.answer_callback_query(query.id, text=f"🏁 تم نشر {count} سؤال.", show_alert=True)
@@ -120,39 +117,65 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             con.execute("DELETE FROM questions"); con.execute("DELETE FROM sqlite_sequence WHERE name='questions'")
         await refresh_panel_inplace(query, context); await query.answer("تم التنظيف")
 
-# -------------------- الإرسال --------------------
-async def _send_poll_to_chat(app, chat_id, row):
+# -------------------- الإرسال (معدل للقنوات) --------------------
+async def _send_poll_to_chat(app, chat_id, row, admin_id=None):
     qid, q, raw_opts, c_idx, exp = row
     opts = raw_opts.split("|||")
     try:
-        msg = await app.bot.send_poll(chat_id=chat_id, question=q, options=opts, type="quiz", correct_option_id=c_idx, explanation=exp[:200] if exp else None, is_anonymous=False)
-        with sqlite3.connect(DB_PATH) as con: con.execute("INSERT OR REPLACE INTO active_polls(poll_id, correct_idx) VALUES(?,?)", (msg.poll.id, c_idx))
+        msg = await app.bot.send_poll(
+            chat_id=chat_id, 
+            question=q, 
+            options=opts, 
+            type="quiz", 
+            correct_option_id=c_idx, 
+            explanation=exp[:200] if exp else None,
+            is_anonymous=True  # ✅ تم التعديل: ضروري جداً للقنوات
+        )
+        with sqlite3.connect(DB_PATH) as con: 
+            con.execute("INSERT OR REPLACE INTO active_polls(poll_id, correct_idx) VALUES(?,?)", (msg.poll.id, c_idx))
         return True
     except Exception as e:
-        print(f"Error {chat_id}: {e}")
+        # إرسال تقرير بالخطأ لك في الخاص لتفهم السبب
+        if admin_id:
+            try: await app.bot.send_message(admin_id, f"❌ فشل النشر في القناة {chat_id}:\nالسبب: {e}")
+            except: pass
         return False
 
-async def process_send_next(context):
+async def process_send_next(context, admin_id):
     with sqlite3.connect(DB_PATH) as con:
         row = con.execute("SELECT * FROM questions ORDER BY id ASC LIMIT 1").fetchone()
         targets = [r[0] for r in con.execute("SELECT chat_id FROM targets").fetchall()]
     if not row or not targets: return False
-    for chat_id in targets: await _send_poll_to_chat(context.application, chat_id, row)
-    with sqlite3.connect(DB_PATH) as con: con.execute("DELETE FROM questions WHERE id=?", (row[0],))
-    return True
+    
+    success = False
+    for chat_id in targets: 
+        if await _send_poll_to_chat(context.application, chat_id, row, admin_id):
+            success = True
+            
+    if success: # نحذف السؤال فقط إذا نجح الإرسال لواحد على الأقل
+        with sqlite3.connect(DB_PATH) as con: con.execute("DELETE FROM questions WHERE id=?", (row[0],))
+    return success
 
-async def process_send_all(context, status_msg):
+async def process_send_all(context, status_msg, admin_id):
     with sqlite3.connect(DB_PATH) as con:
         rows = con.execute("SELECT * FROM questions ORDER BY id ASC").fetchall()
         targets = [r[0] for r in con.execute("SELECT chat_id FROM targets").fetchall()]
     if not rows or not targets: return 0
+    
     count = 0
     for i, row in enumerate(rows, 1):
         if i % 5 == 0: await status_msg.edit_text(f"🚀 جاري النشر... ({i}/{len(rows)})")
-        for chat_id in targets: await _send_poll_to_chat(context.application, chat_id, row)
-        with sqlite3.connect(DB_PATH) as con: con.execute("DELETE FROM questions WHERE id=?", (row[0],))
-        count += 1
-        await asyncio.sleep(2.5)
+        
+        sent_any = False
+        for chat_id in targets: 
+            if await _send_poll_to_chat(context.application, chat_id, row, admin_id):
+                sent_any = True
+        
+        if sent_any:
+            with sqlite3.connect(DB_PATH) as con: con.execute("DELETE FROM questions WHERE id=?", (row[0],))
+            count += 1
+        
+        await asyncio.sleep(3) # فاصل زمني
     return count
 
 async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,57 +206,29 @@ async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 added += 1
     if added > 0: await update.message.reply_text(f"✅ تم إضافة {added} سؤال.")
 
-# -------------------- الربط اليدوي (مع سجلات أخطاء) --------------------
 async def force_add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("DEBUG: Force Add Triggered") # ستظهر في الشاشة السوداء
-    
-    if update.effective_user.id != ADMIN_ID:
-        print(f"DEBUG: User {update.effective_user.id} not authorized")
-        return
-    
+    if update.effective_user.id != ADMIN_ID: return
     try:
-        if not context.args:
-             await update.message.reply_text("⚠️ اكتب الآيدي بعد الأمر. مثال:\n`/forceadd -100123456`")
-             return
-        
-        target_id_str = context.args[0]
-        # تنظيف الرقم من أي مسافات مخفية
-        target_id = int(target_id_str.strip())
-        
-        print(f"DEBUG: Trying to add {target_id}")
-
+        target_id = int(context.args[0])
         with sqlite3.connect(DB_PATH) as con:
             con.execute("INSERT OR REPLACE INTO targets(chat_id, title) VALUES(?,?)", (target_id, "قناة مضافة يدوياً"))
-        
-        await update.message.reply_text(f"✅ **تم ربط القناة بنجاح!**\nالآيدي: `{target_id}`", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ تم الربط: `{target_id}`", parse_mode="Markdown")
+    except: await update.message.reply_text("❌ خطأ في الآيدي")
 
-    except ValueError:
-         await update.message.reply_text("❌ تأكد أن الآيدي عبارة عن أرقام فقط.")
-    except Exception as e:
-         print(f"DEBUG Error: {e}")
-         await update.message.reply_text(f"❌ حدث خطأ: {e}")
-
-# -------------------- التشغيل --------------------
 def main():
     if not BOT_TOKEN: print("TOKEN Error"); return
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler(["start", "admin"], show_panel))
-    
-    # أوامر الإضافة
     app.add_handler(CommandHandler("forceadd", force_add_channel))
-    app.add_handler(CommandHandler("settarget", lambda u,c: u.message.reply_text("استخدم /forceadd للربط الأكيد.")))
-    
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_txt))
     
-    # معالج النقاط
-    async def handle_poll(update, context):
-        pass 
+    async def handle_poll(update, context): pass 
     app.add_handler(PollAnswerHandler(handle_poll))
     
-    print("Bot is Running... Waiting for commands...")
+    print("Bot is Running...")
     app.run_polling()
 
 if __name__ == "__main__":
