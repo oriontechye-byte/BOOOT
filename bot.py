@@ -2,7 +2,6 @@ import os
 import re
 import sqlite3
 import asyncio
-import logging
 from typing import List, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, PollAnswer
 from telegram.ext import (
@@ -17,7 +16,7 @@ from telegram.ext import (
 
 # -------------------- الإعدادات --------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_ID = 7358178408
+ADMIN_ID = 7358178408  # آيديك
 DB_PATH = "super_mcq.db"
 
 # -------------------- قاعدة البيانات --------------------
@@ -63,7 +62,7 @@ async def refresh_panel_inplace(query, context):
     try: await query.edit_message_reply_markup(reply_markup=get_dashboard_markup(q, t))
     except: pass
 
-# -------------------- الأزرار --------------------
+# -------------------- معالجة الأزرار --------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return
@@ -94,7 +93,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "send_one":
         await query.answer("⏳ جاري الإرسال...")
-        if await process_send_next(context, update.effective_user.id): # نمرر الآيدي لإرسال الأخطاء
+        # نمرر الآيدي لكي يرسل لك تقرير الخطأ إذا فشل
+        if await process_send_next(context, update.effective_user.id): 
             await refresh_panel_inplace(query, context)
             await context.bot.answer_callback_query(query.id, text="✅ تم الإرسال!", show_alert=False)
         else:
@@ -117,7 +117,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             con.execute("DELETE FROM questions"); con.execute("DELETE FROM sqlite_sequence WHERE name='questions'")
         await refresh_panel_inplace(query, context); await query.answer("تم التنظيف")
 
-# -------------------- الإرسال (معدل للقنوات) --------------------
+# -------------------- الإرسال (مصحح للقنوات) --------------------
 async def _send_poll_to_chat(app, chat_id, row, admin_id=None):
     qid, q, raw_opts, c_idx, exp = row
     opts = raw_opts.split("|||")
@@ -129,13 +129,13 @@ async def _send_poll_to_chat(app, chat_id, row, admin_id=None):
             type="quiz", 
             correct_option_id=c_idx, 
             explanation=exp[:200] if exp else None,
-            is_anonymous=True  # ✅ تم التعديل: ضروري جداً للقنوات
+            is_anonymous=True  # ✅ هذا هو التعديل الضروري للقنوات
         )
         with sqlite3.connect(DB_PATH) as con: 
             con.execute("INSERT OR REPLACE INTO active_polls(poll_id, correct_idx) VALUES(?,?)", (msg.poll.id, c_idx))
         return True
     except Exception as e:
-        # إرسال تقرير بالخطأ لك في الخاص لتفهم السبب
+        # إرسال تقرير بالخطأ لك في الخاص
         if admin_id:
             try: await app.bot.send_message(admin_id, f"❌ فشل النشر في القناة {chat_id}:\nالسبب: {e}")
             except: pass
@@ -152,7 +152,7 @@ async def process_send_next(context, admin_id):
         if await _send_poll_to_chat(context.application, chat_id, row, admin_id):
             success = True
             
-    if success: # نحذف السؤال فقط إذا نجح الإرسال لواحد على الأقل
+    if success: 
         with sqlite3.connect(DB_PATH) as con: con.execute("DELETE FROM questions WHERE id=?", (row[0],))
     return success
 
