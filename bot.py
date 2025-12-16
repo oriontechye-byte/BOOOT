@@ -18,7 +18,7 @@ from telegram.ext import (
 # ضع القيم الخاصة بك هنا مباشرة إذا لم تستخدم ملف .env
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 # استبدل الرقم 0 بآيديك الحقيقي (تأكد أنه رقم وليس نص)
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0").strip() or "0") 
+ADMIN_ID = "7358178408"
 DB_PATH = "super_mcq.db"
 
 # -------------------- قاعدة البيانات --------------------
